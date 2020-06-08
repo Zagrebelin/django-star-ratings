@@ -41,7 +41,7 @@ class RatingManager(models.Manager):
         rating._user_rating_deleted = True
         return rating
 
-    def rate(self, instance, score, user=None, ip=None, clear=False):
+    def rate(self, instance, score, user=None, ip=None, clear=False, **kwargs):
         if isinstance(instance, self.model):
             raise TypeError("Rating manager 'rate' expects model to be rated, not Rating model.")
         ct = ContentType.objects.get_for_model(instance)
@@ -67,7 +67,7 @@ class RatingManager(models.Manager):
             return
         else:
             rating, created = self.get_or_create(content_type=ct, object_id=instance.pk)
-            return UserRating.objects.create(user=user, score=score, rating=rating, ip=ip).rating
+            return UserRating.objects.create(user=user, score=score, rating=rating, ip=ip, **kwargs).rating
 
 
 class AbstractBaseRating(models.Model):
@@ -150,6 +150,7 @@ class UserRating(TimeStampedModel):
     ip = models.GenericIPAddressField(blank=True, null=True)
     score = models.PositiveSmallIntegerField()
     rating = models.ForeignKey(get_star_ratings_rating_model_name(), related_name='user_ratings', on_delete=models.CASCADE)
+    review = models.TextField(null=True)
 
     objects = UserRatingManager()
 
