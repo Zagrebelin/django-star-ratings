@@ -105,7 +105,7 @@ class AbstractBaseRating(models.Model):
     """
 
     count = models.PositiveIntegerField(default=0)
-    total = models.PositiveIntegerField(default=0)
+    total = models.IntegerField(default=0)
     average = models.DecimalField(max_digits=6, decimal_places=3, default=Decimal(0.0))
     likes = models.PositiveIntegerField(default=0)
     dislikes = models.PositiveIntegerField(default=0)
