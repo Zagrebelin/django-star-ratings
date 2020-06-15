@@ -8,17 +8,25 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.db.models import Avg, Count, Sum
+from django.db.models import Avg, Count, Sum, Q
 from django.utils.translation import ugettext as _
 from model_utils.models import TimeStampedModel
 
-from . import app_settings, get_star_ratings_rating_model_name, get_star_ratings_rating_model
+from . import (
+    app_settings,
+    get_star_ratings_rating_model_name,
+    get_star_ratings_rating_model,
+)
 
 
 def _clean_user(user):
     if not app_settings.STAR_RATINGS_ANONYMOUS:
         if not user:
-            raise ValueError(_("User is mandatory. Enable 'STAR_RATINGS_ANONYMOUS' for anonymous ratings."))
+            raise ValueError(
+                _(
+                    "User is mandatory. Enable 'STAR_RATINGS_ANONYMOUS' for anonymous ratings."
+                )
+            )
         return user
     return None
 
@@ -26,13 +34,18 @@ def _clean_user(user):
 class RatingManager(models.Manager):
     def for_instance(self, instance):
         if isinstance(instance, self.model):
-            raise TypeError("Rating manager 'for_instance' expects model to be rated, not Rating model.")
+            raise TypeError(
+                "Rating manager 'for_instance' expects model to be rated, not Rating model."
+            )
         ct = ContentType.objects.get_for_model(instance)
         ratings, created = self.get_or_create(content_type=ct, object_id=instance.pk)
         return ratings
 
     def ratings_for_instance(self, instance):
-        warn("RatingManager method 'ratings_for_instance' has been renamed to 'for_instance'. Please change uses of 'Rating.objects.ratings_for_instance' to 'Rating.objects.for_instance' in your code.", DeprecationWarning)
+        warn(
+            "RatingManager method 'ratings_for_instance' has been renamed to 'for_instance'. Please change uses of 'Rating.objects.ratings_for_instance' to 'Rating.objects.for_instance' in your code.",
+            DeprecationWarning,
+        )
         return self.for_instance(instance)
 
     def delete_existing(self, existing_rating):
@@ -43,20 +56,26 @@ class RatingManager(models.Manager):
 
     def rate(self, instance, score, user=None, ip=None, clear=False, **kwargs):
         if isinstance(instance, self.model):
-            raise TypeError("Rating manager 'rate' expects model to be rated, not Rating model.")
+            raise TypeError(
+                "Rating manager 'rate' expects model to be rated, not Rating model."
+            )
         ct = ContentType.objects.get_for_model(instance)
 
         user = _clean_user(user)
         existing_rating = UserRating.objects.for_instance_by_user(instance, user)
 
         if existing_rating:
-            if not app_settings.STAR_RATINGS_CLEARABLE and not app_settings.STAR_RATINGS_RERATE:
+            if (
+                not app_settings.STAR_RATINGS_CLEARABLE
+                and not app_settings.STAR_RATINGS_RERATE
+            ):
                 raise ValidationError(_('Already rated.'))
 
             same_as_previous = existing_rating.score == score
 
-            if (app_settings.STAR_RATINGS_CLEARABLE and clear) or \
-                    (app_settings.STAR_RATINGS_RERATE_SAME_DELETE and same_as_previous):
+            if (app_settings.STAR_RATINGS_CLEARABLE and clear) or (
+                app_settings.STAR_RATINGS_RERATE_SAME_DELETE and same_as_previous
+            ):
                 return self.delete_existing(existing_rating=existing_rating)
             elif score is not None:
                 existing_rating.score = score
@@ -67,18 +86,33 @@ class RatingManager(models.Manager):
             return
         else:
             rating, created = self.get_or_create(content_type=ct, object_id=instance.pk)
-            return UserRating.objects.create(user=user, score=score, rating=rating, ip=ip, **kwargs).rating
+            return UserRating.objects.create(
+                user=user, score=score, rating=rating, ip=ip, **kwargs
+            ).rating
+
+    def like(self, *args, **kwargs):
+        kwargs['score'] = 1
+        return self.rate(*args, **kwargs)
+
+    def dislike(self, *args, **kwargs):
+        kwargs['score'] = -1
+        return self.rate(*args, **kwargs)
 
 
 class AbstractBaseRating(models.Model):
     """
     Attaches Rating models and running counts to the model being rated via a generic relation.
     """
+
     count = models.PositiveIntegerField(default=0)
     total = models.PositiveIntegerField(default=0)
     average = models.DecimalField(max_digits=6, decimal_places=3, default=Decimal(0.0))
+    likes = models.PositiveIntegerField(default=0)
+    dislikes = models.PositiveIntegerField(default=0)
 
-    content_type = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.CASCADE)
+    content_type = models.ForeignKey(
+        ContentType, null=True, blank=True, on_delete=models.CASCADE
+    )
     object_id = models.PositiveIntegerField(null=True, blank=True)
     content_object = GenericForeignKey()
 
@@ -98,6 +132,8 @@ class AbstractBaseRating(models.Model):
             'total': self.total,
             'average': self.average,
             'percentage': self.percentage,
+            'likes': self.likes,
+            'dislikes': self.dislikes,
         }
 
     def __str__(self):
@@ -107,10 +143,18 @@ class AbstractBaseRating(models.Model):
         """
         Recalculate the totals, and save.
         """
-        aggregates = self.user_ratings.aggregate(total=Sum('score'), average=Avg('score'), count=Count('score'))
+        aggregates = self.user_ratings.aggregate(
+            total=Sum('score'),
+            average=Avg('score'),
+            count=Count('score'),
+            likes=Count('score', filter=Q(score__gt=0)),
+            dislikes=Count('score', filter=Q(score__lt=0)),
+        )
         self.count = aggregates.get('count') or 0
         self.total = aggregates.get('total') or 0
         self.average = aggregates.get('average') or 0.0
+        self.likes = aggregates.get('likes') or 0
+        self.dislikes = aggregates.get('dislikes') or 0
         self.save()
 
 
@@ -124,13 +168,17 @@ class UserRatingManager(models.Manager):
         ct = ContentType.objects.get_for_model(instance)
         user = _clean_user(user)
         if user:
-            return self.filter(rating__content_type=ct, rating__object_id=instance.pk, user=user).first()
+            return self.filter(
+                rating__content_type=ct, rating__object_id=instance.pk, user=user
+            ).first()
         else:
             return None
 
     def has_rated(self, instance, user=None):
         if isinstance(instance, get_star_ratings_rating_model()):
-            raise TypeError("UserRating manager 'has_rated' expects model to be rated, not UserRating model.")
+            raise TypeError(
+                "UserRating manager 'has_rated' expects model to be rated, not UserRating model."
+            )
 
         rating = self.for_instance_by_user(instance, user=user)
         return rating is not None
@@ -146,10 +194,17 @@ class UserRating(TimeStampedModel):
     """
     An individual rating of a user against a model.
     """
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, blank=True, null=True, on_delete=models.CASCADE)
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, blank=True, null=True, on_delete=models.CASCADE
+    )
     ip = models.GenericIPAddressField(blank=True, null=True)
-    score = models.PositiveSmallIntegerField()
-    rating = models.ForeignKey(get_star_ratings_rating_model_name(), related_name='user_ratings', on_delete=models.CASCADE)
+    score = models.SmallIntegerField()
+    rating = models.ForeignKey(
+        get_star_ratings_rating_model_name(),
+        related_name='user_ratings',
+        on_delete=models.CASCADE,
+    )
     review = models.TextField(null=True)
 
     objects = UserRatingManager()
@@ -159,5 +214,9 @@ class UserRating(TimeStampedModel):
 
     def __str__(self):
         if not app_settings.STAR_RATINGS_ANONYMOUS:
-            return '{} rating {} for {}'.format(self.user, self.score, self.rating.content_object)
-        return '{} rating {} for {}'.format(self.ip, self.score, self.rating.content_object)
+            return '{} rating {} for {}'.format(
+                self.user, self.score, self.rating.content_object
+            )
+        return '{} rating {} for {}'.format(
+            self.ip, self.score, self.rating.content_object
+        )
